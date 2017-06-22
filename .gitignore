@@ -1,11 +1,11 @@
 output/
 papers/
+.ipynb_checkpoints/
 .DS_Store
 *~
 _*_
 #*#
 *.pyc
-*.ipynb*
 *.pkl
 *.csv
 *.log
