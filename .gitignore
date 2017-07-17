@@ -1,4 +1,5 @@
 output/
+output_data/
 papers/
 .ipynb_checkpoints/
 .DS_Store
