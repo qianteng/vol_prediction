@@ -1,9 +1,12 @@
-import colorsys
+import config
+import os
 import functools
-import pandas as pd
 import datetime as dt
-from dateutil.parser import parse
+from collections import defaultdict
+import pandas as pd
 import numpy as np
+from dateutil.parser import parse
+from tqdm import tqdm
 
 
 class Instrument(object):
@@ -13,10 +16,10 @@ class Instrument(object):
         self.sample_period = sample_period  # sample period for vol estimation in minutes
         self.id = df["InstrumentID"][0]
         self.market_time, self.hour = self.get_market_time()
-        self.clean_data = self.clean_data()
+        self.clean_data = self._get_clean_data()
         self.lags = [6] # best lag is 6
-        
-    def clean_data(self):
+
+    def _get_clean_data(self):
         """Clean dataframe"""
         df = self._raw_data
         df["UpdateTime"] = df["UpdateTime"].apply(lambda x: parse(x).time())
@@ -33,23 +36,24 @@ class Instrument(object):
         mask = np.logical_and(mask, df["LastPrice"] > 0)
         df = df[mask].copy()
         df["LogPrice"] = df["LastPrice"].apply(np.log)
+        df["Return"] = df["LogPrice"].diff()
         return df
-        
+
     def get_market_time(self):
         """Create a dataframe with maket open periods"""
-        df = pd.DataFrame(index = ["ag", "bu", "rb", "ru", "zn"],
-                          columns = ["day_period_1", "day_period_2", "day_period_3", "night_period_1"])
+        df = pd.DataFrame(index=["ag", "bu", "rb", "ru", "zn"],
+                          columns=["day_period_1", "day_period_2", "day_period_3", "night_period_1"])
         df.index.name = "Instrument"
         df.columns.name = "open periods"
         for row in df.index:
             df.loc[row]["day_period_1"] = (dt.time(9, 0, 0), dt.time(10, 14, 59, 99999))      # avoid the last datapoint
             df.loc[row]["day_period_2"] = (dt.time(10, 30, 0), dt.time(11, 29, 59, 99999))
-            df.loc[row]["day_period_3"] = (dt.time(13, 30, 0), dt.time(14, 59, 59, 99999)) 
-        for row in "ag", :
+            df.loc[row]["day_period_3"] = (dt.time(13, 30, 0), dt.time(14, 59, 59, 99999))
+        for row in ["ag"]:
             df.loc[row]["night_period_1"] = (dt.time(21, 0, 0), dt.time(2, 29, 59, 99999))
         for row in "bu", "rb", "zn":
             df.loc[row]["night_period_1"] = (dt.time(21, 0, 0), dt.time(0, 59, 59, 99999))
-        for row in "ru", :
+        for row in ["ru"]:
             df.loc[row]["night_period_1"] = (dt.time(21, 0, 0), dt.time(10, 59, 59, 99999))
         market_time = df.loc[self.id[:2]]
         if self.timesofday == "day":
@@ -61,7 +65,7 @@ class Instrument(object):
             dum = (period[1].hour - period[0].hour) + (period[1].minute - period[0].minute) / 60.0
             hour += dum if dum > 0 else (dum + 24)
         return market_time, hour
-    
+
     def get_vol(self):
         """Calculate volatility for the data"""
         vol_df = pd.DataFrame()
@@ -80,7 +84,7 @@ class Instrument(object):
             vol_df.sort_values(by="datetime", inplace=True, kind="mergesort")
             self._reset_cache()
         return vol_df
-        
+
     @staticmethod
     def vol_Zhou(logprice, annual_coef=1, k=1):
         """Calculate volatility of the series
@@ -93,10 +97,10 @@ class Instrument(object):
         """
         x = (logprice - logprice.shift(k)).dropna()
         vol_squared = (np.sum(x * x) + np.sum((x * x.shift(-k)).dropna()) + np.sum((x * x.shift(k)).dropna())) / k
-        vol_squared = max(0, vol_squared)      # vol_squared could be negative 
+        vol_squared = max(0, vol_squared)      # vol_squared could be negative
         vol = np.sqrt(vol_squared) * annual_coef
         return vol
-    
+
     def vol_tsrv(self, j=1, k=3):
         """Calculate volatility using TSVR AA formulat by LanZhang.
         DOESN'T PRODUCE CONSISTENT RESULT.
@@ -112,7 +116,58 @@ class Instrument(object):
         #vol_squared *= n / ((k - j) * n_k)
         vol = np.sqrt(vol_squared / self.hour * 24 * 252)
         return vol
-    
+
     def _reset_cache(self):
         self._raw_data = None
         self.clean_data = None
+
+
+def calculate_vol():
+    commodities = [name for name in os.listdir(config.DATA_BASE_PATH) if not name.startswith(".")]
+    timesofdays = ["day", "night"]
+    sample_period = 5     # min
+
+    for commodity in commodities[:1]:
+        dfs_dict = defaultdict(list)
+        for timesofday in timesofdays:
+            timesofday_path = os.path.join(config.DATA_BASE_PATH, commodity, timesofday)
+            timesofday_files = os.listdir(timesofday_path)
+            # timesofday_files = [x for x in timesofday_files if (x.startswith(commodity + "1603") or
+            #     x.startswith(commodity + "1604"))]
+            for timesofday_file in tqdm(timesofday_files[:]):
+                timesofday_df = pd.read_csv(os.path.join(timesofday_path, timesofday_file), parse_dates=[[1, 36]], keep_date_col=True)
+                if not timesofday_df.empty:
+                    inst = Instrument(timesofday_df, sample_period, timesofday)
+                    vols = inst.get_vol()
+                    if not vols.empty:
+                        dfs_dict[inst.id].append(vols)
+                else:
+                    print(timesofday_file)
+        for k, v in dfs_dict.items():
+            vol_full_df = pd.concat(v)
+            vol_full_df.sort_values(by="datetime", inplace=True, kind="mergesort")
+            vol_full_df.to_csv(os.path.join(config.OUTPUT_DATA_PATH, k + '.csv'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
