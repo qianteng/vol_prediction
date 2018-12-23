@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm_notebook      #tqdm
 from sklearn.preprocessing import StandardScaler
 
-
+# test
 class Instrument(object):
     def __init__(self, df, sample_period, timesofday):
         """Class to clean data and calculate volatility for a instrument
